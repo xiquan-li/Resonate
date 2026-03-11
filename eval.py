@@ -106,169 +106,41 @@ def main():
                                     need_vae_encoder=False)
     feature_utils = feature_utils.to(device, dtype).eval()
 
-    if args.eval_dataset.lower() == 'librispeech-pc':
-        metadata_file = '/inspire/hdd/project/embodied-multimodality/public/xqli/TTA/F5-TTS/data/librispeech_pc_test_clean_cross_sentence.lst'
-        f = open(metadata_file)
-        lines = f.readlines()
-        f.close()
-
-        test_set = []
-        for line in tqdm(lines):
-            ref_utt, ref_dur, ref_txt, gen_utt, gen_dur, gen_txt = line.strip().split("\t")
-            test_set.append((gen_utt, gen_txt, float(gen_dur)))
-
-        for file_name, prompt, duration in tqdm(test_set):
-            latent_seq_len = int(math.ceil(duration * seq_cfg.sampling_rate / seq_cfg.spectrogram_frame_rate / seq_cfg.latent_downsample_rate))
-            if args.enable_speech_prompt: 
-                prompt = f"A person says: '{prompt}'"
-            log.info(f'Prompt: {prompt}, Duration: {duration}, Latent seq len: {latent_seq_len}')
-            audios = generate_fm([prompt],
-                                  feature_utils=feature_utils,
-                                  net=net,
-                                  fm=fm,
-                                  rng=rng,
-                                  cfg_strength=cfg_strength,
-                                  latent_seq_len=latent_seq_len)
-            audio = audios.float().cpu()[0]
-            save_path = output_dir / f'{file_name}.wav'
-            torchaudio.save(save_path, audio, seq_cfg.sampling_rate)
-            log.info(f'Audio saved to {save_path}')
+    metadata_file = 'sets/acc_prompt.json'
+    import json
+    data = json.load(open(metadata_file, 'r'))
         
-        log.info('Memory usage: %.2f GB', torch.cuda.max_memory_allocated() / (2**30))
-    elif args.eval_dataset.lower() == 'audiocaps':
-        metadata_file = '/inspire/hdd/project/embodied-multimodality/public/xqli/TTA/resonate/sets/test-audiocaps.tsv'
-        import pandas as pd
-        data = pd.read_csv(metadata_file, sep="\t").to_dict('records')
-        # for d in tqdm(data): 
-        #     audio_id = d['id']
-        #     prompt = d['caption']
-            
-        #     log.info(f'Audio id: {audio_id} Prompt: {prompt}, ')
-        #     audios = generate_fm([prompt],
-        #                           feature_utils=feature_utils,
-        #                           net=net,
-        #                           fm=fm,
-        #                           rng=rng,
-        #                           cfg_strength=cfg_strength)
-        #     audio = audios.float().cpu()[0]
-        #     save_path = output_dir / f'{audio_id}.wav'
-        #     torchaudio.save(save_path, audio, seq_cfg.sampling_rate)
-        #     log.info(f'Audio saved to {save_path}')
-            
-        bsz = 16
-        for i in tqdm(range(0, len(data), bsz)):
-            batch = data[i:i + bsz]
-            audio_ids = [d['id'] for d in batch]
-            prompts = [d['caption'] for d in batch]
-            for audio_id, prompt in zip(audio_ids, prompts):
-                log.info(f'Audio id: {audio_id} Prompt: {prompt}')
+    bsz = 16
+    for i in tqdm(range(0, len(data), bsz)):
+        batch = data[i:i + bsz]
+        audio_ids = [d['id'] for d in batch]
+        prompts = [d['prompt_text'] for d in batch]
+        for audio_id, prompt in zip(audio_ids, prompts):
+            log.info(f'Audio id: {audio_id} Prompt: {prompt}')
 
-            # batch generate
-            audios = generate_fm(
-                prompts,
-                feature_utils=feature_utils,
-                net=net,
-                fm=fm,
-                rng=rng,
-                cfg_strength=cfg_strength
-            ) 
+        # batch generate
+        audios = generate_fm(
+            prompts,
+            feature_utils=feature_utils,
+            net=net,
+            fm=fm,
+            rng=rng,
+            cfg_strength=cfg_strength
+        ) 
 
-            audios = audios.float().cpu()
-            for audio_id, audio in zip(audio_ids, audios):
-                save_path = output_dir / f'{audio_id}.wav'
-                audio = audio.detach().cpu()
-                if audio.ndim == 1:
-                    audio = audio.unsqueeze(0)          # [1, T]
-                elif audio.ndim == 2:
-                    pass                                # already [C, T]
-                elif audio.ndim == 3:
-                    audio = audio.squeeze(0)            # [1, T] or [C, T]
-                else:
-                    raise RuntimeError(f"Unexpected audio shape: {audio.shape}")
-                torchaudio.save(save_path, audio, seq_cfg.sampling_rate)
-                
-    elif args.eval_dataset.lower() == 'tta-bench-acc':
-        metadata_file = '/inspire/hdd/project/embodied-multimodality/public/xqli/TTA/TTA-Bench-tools/prompts/acc_prompt.json'
-        import json
-        data = json.load(open(metadata_file, 'r'))
-            
-        bsz = 16
-        for i in tqdm(range(0, len(data), bsz)):
-            batch = data[i:i + bsz]
-            audio_ids = [d['id'] for d in batch]
-            prompts = [d['prompt_text'] for d in batch]
-            for audio_id, prompt in zip(audio_ids, prompts):
-                log.info(f'Audio id: {audio_id} Prompt: {prompt}')
-
-            # batch generate
-            audios = generate_fm(
-                prompts,
-                feature_utils=feature_utils,
-                net=net,
-                fm=fm,
-                rng=rng,
-                cfg_strength=cfg_strength
-            ) 
-
-            audios = audios.float().cpu()
-            for audio_id, audio in zip(audio_ids, audios):
-                save_path = output_dir / f'{audio_id}.wav'
-                audio = audio.detach().cpu()
-                if audio.ndim == 1:
-                    audio = audio.unsqueeze(0)          # [1, T]
-                elif audio.ndim == 2:
-                    pass                                # already [C, T]
-                elif audio.ndim == 3:
-                    audio = audio.squeeze(0)            # [1, T] or [C, T]
-                else:
-                    raise RuntimeError(f"Unexpected audio shape: {audio.shape}")
-                torchaudio.save(save_path, audio, seq_cfg.sampling_rate)
-                
-                
-    elif  "audioset-sl" in args.eval_dataset.lower(): 
-        if args.eval_dataset.lower() == "audioset-sl-1k": 
-            metadata_file = '/inspire/hdd/project/embodied-multimodality/public/xqli/TTA/resonate/data/AudioSet-SL/GRPO_Meta/test_metadata.jsonl'
-        elif args.eval_dataset.lower() == "audioset-sl-200": 
-            metadata_file = '/inspire/hdd/project/embodied-multimodality/public/xqli/TTA/resonate/data/AudioSet-SL/GRPO_Meta/test_metadata_200.jsonl'
-        import json
-        from resonate.data.online_audio import format_variant1
-
-        bsz = 16
-        data = [json.loads(d) for d in open(metadata_file, 'r')]
-
-        for i in tqdm(range(0, len(data), bsz)):
-            batch = data[i:i + bsz]
-            audio_ids = [d['audio_id'] for d in batch]
-            prompts = [format_variant1(d['phrases']) for d in batch]
-            for audio_id, prompt in zip(audio_ids, prompts):
-                log.info(f'Audio id: {audio_id} Prompt: {prompt}')
-
-            # batch generate
-            audios = generate_fm(
-                prompts,
-                feature_utils=feature_utils,
-                net=net,
-                fm=fm,
-                rng=rng,
-                cfg_strength=cfg_strength
-            ) 
-
-            audios = audios.float().cpu()
-            for audio_id, audio in zip(audio_ids, audios):
-                save_path = output_dir / f'{audio_id}.wav'
-                audio = audio.detach().cpu()
-                if audio.ndim == 1:
-                    audio = audio.unsqueeze(0)          # [1, T]
-                elif audio.ndim == 2:
-                    pass                                # already [C, T]
-                elif audio.ndim == 3:
-                    audio = audio.squeeze(0)            # [1, T] or [C, T]
-                else:
-                    raise RuntimeError(f"Unexpected audio shape: {audio.shape}")
-                torchaudio.save(save_path, audio, seq_cfg.sampling_rate)
-
-    else:
-        raise ValueError(f'Invalid eval dataset: {args.eval_dataset}')
+        audios = audios.float().cpu()
+        for audio_id, audio in zip(audio_ids, audios):
+            save_path = output_dir / f'{audio_id}.wav'
+            audio = audio.detach().cpu()
+            if audio.ndim == 1:
+                audio = audio.unsqueeze(0)          # [1, T]
+            elif audio.ndim == 2:
+                pass                                # already [C, T]
+            elif audio.ndim == 3:
+                audio = audio.squeeze(0)            # [1, T] or [C, T]
+            else:
+                raise RuntimeError(f"Unexpected audio shape: {audio.shape}")
+            torchaudio.save(save_path, audio, seq_cfg.sampling_rate)
 
 
 if __name__ == '__main__':
